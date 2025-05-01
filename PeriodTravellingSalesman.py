@@ -1,17 +1,18 @@
 import numpy as np
 import random
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 # Params
 NUM_DAYS = 50
-POP_SIZE = 200
-GENERATIONS = 50
+POP_SIZE = 100
+GENERATIONS = 100
 MUTATION_RATE = 0.2
 CROSSOVER_RATE = 0.9
 DATA_FILE = "vrp8.txt"
+mutation_heatmap = np.zeros((NUM_DAYS, NUM_DAYS), dtype=int)
 
-# Load Data
+
+# Loading Data
 def load_data(file_path):
     coords = {}
     freq = {}
@@ -23,7 +24,7 @@ def load_data(file_path):
             freq[node_id] = f
     return coords, freq
 
-# Helper functions
+# Helper Functions
 def euclidean(p1, p2):
     return np.hypot(p1[0] - p2[0], p1[1] - p2[1])
 
@@ -68,8 +69,8 @@ def crossover(parent1, parent2):
     return child1, child2
 
 def mutate(individual, freq):
+    global mutation_heatmap
     new_ind = [day[:] for day in individual]
-    d1, d2 = None, None
 
     if random.random() < MUTATION_RATE:
         d1, d2 = random.sample(range(NUM_DAYS), 2)
@@ -79,8 +80,10 @@ def mutate(individual, freq):
             i1, i2 = new_ind[d1].index(c1), new_ind[d2].index(c2)
             new_ind[d1][i1], new_ind[d2][i2] = c2, c1
 
-    return repair_individual(new_ind, freq), d1, d2
+            mutation_heatmap[d1][d2] += 1
+            mutation_heatmap[d2][d1] += 1  
 
+    return repair_individual(new_ind, freq)
 
 def repair_individual(individual, freq):
     counts = {}
@@ -114,7 +117,34 @@ def repair_individual(individual, freq):
 
     return individual
 
-# Pareto front
+
+def plot_city_visits_comparison(individual, freq):
+    actual_visits = {}
+    for day in individual:
+        for city in day:
+            actual_visits[city] = actual_visits.get(city, 0) + 1
+
+    cities = sorted(freq.keys())
+    required = [freq[city] for city in cities]
+    actual = [actual_visits.get(city, 0) for city in cities]
+
+    x = np.arange(len(cities))
+    width = 0.35
+
+    plt.figure(figsize=(12, 6))
+    plt.bar(x - width/2, required, width, label='Required Visits')
+    plt.bar(x + width/2, actual, width, label='Actual Visits')
+    plt.xlabel("City ID")
+    plt.ylabel("Number of Visits")
+    plt.title("Required vs. Actual City Visits")
+    plt.xticks(x, cities, rotation=90)
+    plt.legend()
+    plt.tight_layout()
+    plt.grid(True, axis='y')
+    plt.show()
+
+
+# Pareto Front
 def get_pareto_front(population, scores):
     pareto = []
     for i, a in enumerate(scores):
@@ -127,27 +157,26 @@ def get_pareto_front(population, scores):
             pareto.append((population[i], a))
     return pareto
 
-# Main
+# GA Loop
 def run_ga(file_path):
     coords, freq = load_data(file_path)
     cities = list(coords.keys())
     population = generate_population(POP_SIZE, cities, freq)
-    mutation_matrix = np.zeros((NUM_DAYS, NUM_DAYS), dtype=int)
 
     pareto_archive = []
     best_distances = []
 
     for gen in range(GENERATIONS):
         print(f"Generation {gen + 1}/{GENERATIONS}")  
-        
+
         scores = [evaluate(ind, coords) for ind in population]
         current_pareto = get_pareto_front(population, scores)
 
         # Best total distance
         best = min(scores, key=lambda x: x[0])
         best_distances.append(best[0])
-        
-        # Merge archive
+
+        # Merge with archive
         combined = pareto_archive + current_pareto
         combined_solutions = [p[1] for p in combined]
         combined_population = [p[0] for p in combined]
@@ -167,21 +196,13 @@ def run_ga(file_path):
         while len(next_population) < POP_SIZE:
             p1, p2 = random.sample(selected, 2)
             c1, c2 = crossover(p1, p2)
-            # c1 = mutate(c1, freq)
-            # c2 = mutate(c2, freq)
+            c1 = mutate(c1, freq)
+            c2 = mutate(c2, freq)
             next_population.extend([c1, c2])
-
-            c1, d1a, d1b = mutate(c1, freq)
-            c2, d2a, d2b = mutate(c2, freq)
-
-            # Track mutations
-            for x, y in [(d1a, d1b), (d2a, d2b)]:
-                if x is not None and y is not None:
-                    mutation_matrix[x][y] += 1
 
         population = next_population[:POP_SIZE]
 
-    return pareto_archive, best_distances, mutation_matrix
+    return pareto_archive, best_distances
 
 # Visualization
 def plot_pareto(pareto):
@@ -203,52 +224,27 @@ def plot_best_distance_over_time(best_distances):
     plt.title("Convergence of Best Total Distance")
     plt.grid(True)
     plt.show()
-    
-def plot_visit_vs_required(individual, freq):
-    visit_count = {}
-    for day in individual:
-        for city in day:
-            visit_count[city] = visit_count.get(city, 0) + 1
 
-    cities = sorted(freq.keys())
-    actual = [visit_count.get(c, 0) for c in cities]
-    required = [freq[c] for c in cities]
-
-    x = np.arange(len(cities))
-    width = 0.35
-
-    plt.figure(figsize=(12, 5))
-    plt.bar(x - width/2, required, width, label='Required', color='orange')
-    plt.bar(x + width/2, actual, width, label='Actual', color='blue')
-    plt.xticks(x, cities, rotation=90)
-    plt.xlabel("City ID")
-    plt.ylabel("Visit Count")
-    plt.title("Required vs. Actual City Visits")
-    plt.legend()
-    plt.tight_layout()
-    plt.grid(True)
-    plt.show()
-
-def plot_mutation_heatmap(mutation_matrix):
+def plot_mutation_heatmap():
     plt.figure(figsize=(10, 8))
-    sns.heatmap(mutation_matrix, cmap='Reds', cbar=True)
-    plt.xlabel("Mutation Target Day (d2)")
-    plt.ylabel("Mutation Source Day (d1)")
+    plt.imshow(mutation_heatmap, cmap='viridis', interpolation='nearest')
+    plt.colorbar(label="Swap Frequency")
     plt.title("Mutation Activity Heatmap (Day-to-Day Swaps)")
+    plt.xlabel("Day")
+    plt.ylabel("Day")
+    plt.xticks(ticks=np.arange(NUM_DAYS))
+    plt.yticks(ticks=np.arange(NUM_DAYS))
     plt.tight_layout()
     plt.show()
 
 
 if __name__ == "__main__":
-    pareto, best_distances, mutation_matrix = run_ga(DATA_FILE)
-    
+    pareto, best_distances = run_ga(DATA_FILE)
     plot_pareto(pareto)
     plot_best_distance_over_time(best_distances)
 
-    if pareto:
-        print("Validating frequency constraints for best solution...")
-        coords, freq = load_data(DATA_FILE)
-        plot_visit_vs_required(pareto[0][0], freq)
-
-    plot_mutation_heatmap(mutation_matrix)
+    best_individual = pareto[0][0]  
+    coords, freq = load_data(DATA_FILE)  
+    plot_city_visits_comparison(best_individual, freq)
+    plot_mutation_heatmap()
 
